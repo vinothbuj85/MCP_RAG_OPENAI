@@ -1,0 +1,35 @@
+from pydantic_settings import BaseSettings
+from typing import List
+
+
+class Settings(BaseSettings):
+    OPENAI_API_KEY: str
+    OPENAI_MODEL: str = "gpt-4.1"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+
+    PINECONE_API_KEY: str
+    PINECONE_INDEX_NAME: str = "hybrid-kb"
+    PINECONE_CLOUD: str = "aws"
+    PINECONE_REGION: str = "us-east-1"
+
+    SERVICENOW_INSTANCE: str
+    SERVICENOW_USERNAME: str
+    SERVICENOW_PASSWORD: str
+
+   
+
+    APP_ENV: str = "production"
+    LOG_LEVEL: str = "INFO"
+    ALLOWED_ORIGINS: str = "*"
+
+    @property
+    def allowed_origins_list(self) -> List[str]:
+        if self.ALLOWED_ORIGINS == "*":
+            return ["*"]
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
+
+    class Config:
+        env_file = ".env"
+
+
+settings = Settings()
