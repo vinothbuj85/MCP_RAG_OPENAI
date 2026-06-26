@@ -7,30 +7,47 @@ from config import Config
 
 
 def extract_record_number(text: str) -> Optional[str]:
-    match = re.search(r"\b(INC|REQ|CHG|TASK)\d{6,}\b", text.upper())
+    """
+    Extract ServiceNow record number from user text.
+    Supports INC, REQ, RITM, CHG, TASK.
+    """
+    match = re.search(r"\b(INC|REQ|RITM|CHG|TASK)\d{6,}\b", text.upper())
     return match.group(0) if match else None
 
 
-def normalize_servicenow_state(state_value):
-    state_map = {
-        "1": "New",
-        "2": "In Progress",
-        "3": "On Hold",
-        "6": "Resolved",
-        "7": "Closed",
-        "8": "Canceled"
-    }
+def get_table_for_record(record_number: str) -> str:
+    """
+    Map ServiceNow record prefix to correct ServiceNow table.
+    """
 
-    if state_value is None:
-        return None
+    record_number = record_number.upper()
 
-    return state_map.get(str(state_value), str(state_value))
+    if record_number.startswith("INC"):
+        return "incident"
+
+    if record_number.startswith("REQ"):
+        return "sc_request"
+
+    if record_number.startswith("RITM"):
+        return "sc_req_item"
+
+    if record_number.startswith("CHG"):
+        return "change_request"
+
+    if record_number.startswith("TASK"):
+        return "task"
+
+    return "task"
 
 
 async def get_servicenow_record(
     record_number: Optional[str] = None,
     query_text: Optional[str] = None
 ) -> Dict[str, Any]:
+    """
+    Get ServiceNow record from original/live ServiceNow instance.
+    """
+
     try:
         if not Config.SERVICENOW_INSTANCE:
             return {
@@ -38,16 +55,36 @@ async def get_servicenow_record(
                 "error": "ServiceNow instance is not configured."
             }
 
+        if not Config.SERVICENOW_USERNAME or not Config.SERVICENOW_PASSWORD:
+            return {
+                "success": False,
+                "error": "ServiceNow username/password is not configured."
+            }
+
         async with httpx.AsyncClient(timeout=20) as client:
+
             if record_number:
-                url = f"{Config.SERVICENOW_INSTANCE}/api/now/table/incident"
+                table_name = get_table_for_record(record_number)
+
+                url = f"{Config.SERVICENOW_INSTANCE}/api/now/table/{table_name}"
 
                 params = {
                     "sysparm_query": f"number={record_number}",
                     "sysparm_limit": "1",
+                    "sysparm_display_value": "true",
+                    "sysparm_exclude_reference_link": "true",
                     "sysparm_fields": (
-                        "number,short_description,state,priority,"
-                        "assignment_group,assigned_to,opened_at,updated_on,close_notes"
+                        "number,"
+                        "short_description,"
+                        "description,"
+                        "state,"
+                        "priority,"
+                        "assignment_group,"
+                        "assigned_to,"
+                        "opened_by,"
+                        "opened_at,"
+                        "sys_updated_on,"
+                        "close_notes"
                     )
                 }
 
@@ -55,30 +92,32 @@ async def get_servicenow_record(
                     url,
                     params=params,
                     auth=(Config.SERVICENOW_USERNAME, Config.SERVICENOW_PASSWORD),
-                    headers={"Accept": "application/json"}
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json"
+                    }
                 )
 
                 response.raise_for_status()
 
-                records = response.json().get("result", [])
+                payload = response.json()
+                records = payload.get("result", [])
 
                 if not records:
                     return {
                         "success": True,
                         "found": False,
+                        "table": table_name,
+                        "record_number": record_number,
                         "message": f"No ServiceNow record found for {record_number}"
                     }
-
-                record = records[0]
-
-                record["state_display"] = normalize_servicenow_state(
-                    record.get("state")
-                )
 
                 return {
                     "success": True,
                     "found": True,
-                    "record": record
+                    "table": table_name,
+                    "record_number": record_number,
+                    "record": records[0]
                 }
 
             if query_text:
@@ -87,9 +126,17 @@ async def get_servicenow_record(
                 params = {
                     "sysparm_query": f"short_descriptionLIKE{query_text}",
                     "sysparm_limit": "5",
+                    "sysparm_display_value": "true",
+                    "sysparm_exclude_reference_link": "true",
                     "sysparm_fields": (
-                        "number,short_description,state,priority,"
-                        "assignment_group,assigned_to,opened_at,updated_on"
+                        "number,"
+                        "short_description,"
+                        "state,"
+                        "priority,"
+                        "assignment_group,"
+                        "assigned_to,"
+                        "opened_at,"
+                        "sys_updated_on"
                     )
                 }
 
@@ -97,21 +144,20 @@ async def get_servicenow_record(
                     url,
                     params=params,
                     auth=(Config.SERVICENOW_USERNAME, Config.SERVICENOW_PASSWORD),
-                    headers={"Accept": "application/json"}
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json"
+                    }
                 )
 
                 response.raise_for_status()
 
                 records = response.json().get("result", [])
 
-                for record in records:
-                    record["state_display"] = normalize_servicenow_state(
-                        record.get("state")
-                    )
-
                 return {
                     "success": True,
                     "found": len(records) > 0,
+                    "table": "incident",
                     "records": records
                 }
 
@@ -120,8 +166,19 @@ async def get_servicenow_record(
             "error": "No ServiceNow record number or query text provided."
         }
 
+    except httpx.HTTPStatusError as e:
+        logger.exception("ServiceNow HTTP error")
+
+        return {
+            "success": False,
+            "error": "ServiceNow API returned an error.",
+            "status_code": e.response.status_code,
+            "details": e.response.text
+        }
+
     except Exception as e:
         logger.exception("ServiceNow lookup failed")
+
         return {
             "success": False,
             "error": str(e)
