@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Hybrid RAG + MCP Enterprise Chatbot</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="page-wrapper">
+
+    <div class="chat-container">
+
+        <div class="chat-header">
+            <div>
+                <h2>Enterprise AI Chatbot</h2>
+                <p>Hybrid RAG + MCP using OpenAI, ServiceNow, Weather and Pinecone</p>
+            </div>
+            <div class="status">
+                <span class="status-dot"></span>
+                Online
+            </div>
+        </div>
+
+        <div id="chatBox" class="chat-box">
+            <div class="message bot-message">
+                <div class="message-content">
+                    Hello! I can help with ServiceNow tickets, internal KB documents, weather, and general questions.
+                    <br><br>
+                    Try:
+                    <ul>
+                        <li>What is the status of INC0012345?</li>
+                        <li>How do I reset my VPN password?</li>
+                        <li>What is the weather in London?</li>
+                        <li>Check INC0012345 and explain VPN reset process.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="typing-indicator" id="typingIndicator">
+            Bot is thinking...
+        </div>
+
+        <form id="chatForm" class="chat-input-area">
+            <input
+                type="text"
+                id="userInput"
+                placeholder="Type your message..."
+                autocomplete="off"
+                required
+            >
+            <button type="submit">Send</button>
+        </form>
+
+    </div>
+
+</div>
+
+<script>
+    const chatForm = document.getElementById("chatForm");
+    const userInput = document.getElementById("userInput");
+    const chatBox = document.getElementById("chatBox");
+    const typingIndicator = document.getElementById("typingIndicator");
+
+    function appendMessage(sender, text, extraHtml = "") {
+        const messageDiv = document.createElement("div");
+        messageDiv.classList.add("message");
+
+        if (sender === "user") {
+            messageDiv.classList.add("user-message");
+        } else {
+            messageDiv.classList.add("bot-message");
+        }
+
+        const contentDiv = document.createElement("div");
+        contentDiv.classList.add("message-content");
+
+        contentDiv.innerHTML = text.replace(/\n/g, "<br>") + extraHtml;
+
+        messageDiv.appendChild(contentDiv);
+        chatBox.appendChild(messageDiv);
+
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function buildMetadataHtml(data) {
+        let html = "";
+
+        if (data.used_tools && data.used_tools.length > 0) {
+            html += `
+                <div class="meta">
+                    <strong>Used tools:</strong> ${data.used_tools.join(", ")}
+                </div>
+            `;
+        }
+
+        if (data.intent) {
+            html += `
+                <div class="meta">
+                    <strong>Intent:</strong> ${data.intent}
+                </div>
+            `;
+        }
+
+        if (data.sources && data.sources.length > 0) {
+            html += `<div class="meta"><strong>Sources:</strong><ul>`;
+
+            data.sources.forEach(source => {
+                html += `
+                    <li>
+                        ${source.title || "Untitled"}
+                        ${source.source ? " - " + source.source : ""}
+                    </li>
+                `;
+            });
+
+            html += `</ul></div>`;
+        }
+
+        return html;
+    }
+
+    async function sendMessage(message) {
+        typingIndicator.style.display = "block";
+
+        try {
+            const response = await fetch("/api/chat", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    message: message
+                })
+            });
+
+            const data = await response.json();
+
+            typingIndicator.style.display = "none";
+
+            if (!response.ok || !data.success) {
+                appendMessage(
+                    "bot",
+                    data.error || "Something went wrong. Please try again."
+                );
+                return;
+            }
+
+            const metadataHtml = buildMetadataHtml(data);
+            appendMessage("bot", data.answer, metadataHtml);
+
+        } catch (error) {
+            typingIndicator.style.display = "none";
+            appendMessage(
+                "bot",
+                "Unable to connect to chatbot backend. Please check the server."
+            );
+        }
+    }
+
+    chatForm.addEventListener("submit", async function(event) {
+        event.preventDefault();
+
+        const message = userInput.value.trim();
+
+        if (!message) {
+            return;
+        }
+
+        appendMessage("user", message);
+
+        userInput.value = "";
+
+        await sendMessage(message);
+    });
+</script>
+
+</body>
+</html>
